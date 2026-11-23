@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { onRecovered } from '../net/connectionGuard';
 import type { DiveApi, Snapshot } from './engine';
 import { sound } from './sound';
 
@@ -22,6 +23,18 @@ export function useGame(api: DiveApi) {
   useEffect(() => {
     api.init().then(setSnap, (e: Error) => setError(e.message));
   }, [api]);
+
+  // Connection-loss safety: after a reconnect the server has refunded (or cashed out) whatever the drop left open, so
+  // reload the board from it. The "Connecting to server…" panel stays up until this finishes.
+  useEffect(
+    () =>
+      onRecovered(async () => {
+        const next = await api.init();
+        setShowResult(false);
+        setSnap(next);
+      }),
+    [api],
+  );
 
   useEffect(() => {
     if (!error) return;

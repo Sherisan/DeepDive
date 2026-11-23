@@ -1,4 +1,5 @@
 import type { DiveApi, Fairness, HistoryEntry, RoundView, Snapshot } from './engine';
+import { assertOnline, connectionLost, ConnectionLostError, isUnreachableStatus, startConnectionGuard } from '../net/connectionGuard';
 
 // Dev: relative URLs go through the Vite proxy. Production: VITE_API_BASE.
 const API_BASE: string = import.meta.env.VITE_API_BASE ?? '';
@@ -20,6 +21,7 @@ async function getToken(): Promise<string> {
 }
 
 async function call<T>(path: string, body?: unknown): Promise<T> {
+  assertOnline(); // nothing is sent (or bet) while the connection is down
   const auth = await getToken();
   let res: Response;
   try {
@@ -29,7 +31,12 @@ async function call<T>(path: string, body?: unknown): Promise<T> {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch {
-    throw new Error('Connection lost.');
+    connectionLost();
+    throw new ConnectionLostError();
+  }
+  if (isUnreachableStatus(res.status)) {
+    connectionLost();
+    throw new ConnectionLostError();
   }
   if (res.status === 429) throw new Error('Too many requests — slow down a little.');
   if (res.status === 401) throw new Error('Your session has expired. Reopen the game from the lobby.');
@@ -73,6 +80,8 @@ export function createHttpEngine(): DiveApi {
 
   return {
     async init() {
+      // Connection-loss safety: the server settles anything a dropped connection left open before the board loads.
+      await startConnectionGuard({ apiBase: API_BASE, getToken, heartbeat: true });
       const [i, wallet, board] = await Promise.all([
         call<Info>('/api/dive/info'),
         call<{ balance: number }>('/api/wallet/balance'),
